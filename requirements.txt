@@ -1,4 +1,0 @@
-streamlit
-finance-datareader
-pandas
-plotly
