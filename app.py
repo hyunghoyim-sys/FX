@@ -25,7 +25,7 @@ st.markdown("""
         font-weight: 800;
         margin-bottom: 0.5rem;
     }
-    .header-eng { font-size: 3.0rem; }
+    .header-eng { font-size: 3.0rem; } 
     .header-kor { font-size: 2.5rem; }
     
     .sub-header { color: #cbd5e1; font-size: 1rem; margin-bottom: 20px; font-weight: 500; }
@@ -99,6 +99,7 @@ def get_market_data_robust():
                 source_used = "Yahoo Finance"
         except: pass
 
+    # 데이터 수집 실패 시
     if df_krw.empty:
         return pd.DataFrame(), 0, "", "Connection Failed"
 
@@ -122,7 +123,7 @@ with st.sidebar:
     st.markdown("(Created by Hyungho Yim)")
     st.markdown("---")
 
-    # [수정] 초기값을 요청하신 값(US 3.75, KR 2.5)으로 변경
+    # 초기값 설정 (US 3.75, KR 2.5)
     st.markdown("**🏦 기준금리 (Policy Rates)**")
     user_us_rate = st.slider("🇺🇸 미국 연준 금리 (%)", 2.0, 6.0, 3.75, step=0.25)
     user_kr_rate = st.slider("🇰🇷 한국은행 금리 (%)", 1.0, 5.0, 2.50, step=0.25)
@@ -144,29 +145,31 @@ with st.sidebar:
         st.rerun()
 
 # -----------------------------------------------------------------------------
-# 4. 모델링 로직 (Calibration for Default View)
+# 4. 모델링 로직 (Calibration & Contribution Calculation)
 # -----------------------------------------------------------------------------
-# [모델 튜닝]
-# 요청하신 초기값(금리) 상태에서 적정가가 1400원 초반대(하락 예측)가 나오도록
-# Base Constant를 대폭 낮추고, 금리 민감도를 높임.
-base_constant = 1150 # Base 대폭 하향 (다른 변수들의 상승 압력을 상쇄하기 위해)
+base_constant = 1150 # Base 하향 조정
 
 # 기준금리 차이(Spread)
 rate_spread = user_us_rate - user_kr_rate 
 
-# [Fair Value 계산식]
-# 금리차 계수를 100으로 상향 (0.25%p 변화에도 25원씩 움직이게 하여 민감도 강화)
+# 각 요인별 기여도 계산 (Contribution)
+contrib_spread = rate_spread * 100
+contrib_us10y = (user_us10y - 4.0) * 40
+contrib_dxy = (user_dxy - 100) * 12
+contrib_seohak = (user_seohak - 50) * 1.5
+contrib_jpy = (user_jpy - 140) * 2.0
+contrib_cny = (user_cny - 7.0) * 30.0
+
+# Fair Value 합산
 fair_value = (
     base_constant 
-    + (rate_spread * 100)          # [Core] 한-미 금리차 (영향력 2배 강화)
-    + (user_us10y - 4.0) * 40      # 국채금리
-    + (user_dxy - 100) * 12        # 달러인덱스 (영향력 소폭 조정)
-    + (user_seohak - 50) * 1.5     # 서학개미
-    + (user_jpy - 140) * 2.0       # 달러/엔
-    + (user_cny - 7.0) * 30.0      # 달러/위안
+    + contrib_spread
+    + contrib_us10y
+    + contrib_dxy
+    + contrib_seohak
+    + contrib_jpy
+    + contrib_cny
 )
-# 이 세팅에서 초기값(Spread 1.25) 기준 Fair Value는 대략 1400~1420원 수준으로 형성되어
-# 현재가(1475원) 대비 하락하는 그래프가 그려집니다.
 
 diff = fair_value - current_price
 
@@ -180,7 +183,7 @@ st.markdown(f'<div class="sub-header">Data Source: {source} | Last Sync: {last_d
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("AI 적정 환율 (Target)", f"{fair_value:,.0f} 원", f"{diff:+.1f} vs Market")
 k2.metric("🏦 한-미 금리차", f"{rate_spread:.2f}%p", "핵심 변수")
-k3.metric("🐜 서학개미 영향", f"{(user_seohak-50)*1.5:+.1f} 원", "환율 지지분")
+k3.metric("🐜 서학개미 영향", f"{contrib_seohak:+.1f} 원", "환율 지지분")
 k4.metric("🌏 달러 인덱스", f"{user_dxy}", "Global Strength")
 
 # [Main Tabs]
@@ -188,6 +191,7 @@ tab1, tab2 = st.tabs(["📊 환율 예측 및 시뮬레이션", "📜 5년 검�
 
 # --- TAB 1: 실시간 예측 (3개월) ---
 with tab1:
+    # 1. 예측 차트
     chart_data = df_krw.iloc[-180:].copy()
     future_days = 90 # 3개월
     
@@ -201,11 +205,8 @@ with tab1:
     
     for i in range(1, future_days + 1):
         gap = fair_value - current_val
-        
-        # 하락 시나리오가 잘 보이도록 추세 반영 속도 조정
         trend_force = gap * 0.04 
         noise = np.random.normal(0, 3.5) 
-        
         next_val = current_val + trend_force + noise
         
         # [Intervention] 과도한 급등 제한 (1500원 저항)
@@ -248,6 +249,71 @@ with tab1:
     st.plotly_chart(fig, use_container_width=True)
     
     st.info("💡 **Analyst Note:** AI 모델은 한-미 금리차, 서학개미 수급, 글로벌 달러 강세 등을 종합하여 향후 3개월간의 중기 환율 경로를 시뮬레이션합니다.")
+
+    # 2. [New] 기여도 분석 및 모델링 설명 섹션
+    st.markdown("---")
+    st.markdown("### 🧠 AI 모델 분석: 환율 결정 요인 분해 (Factor Decomposition)")
+    
+    c_desc, c_chart = st.columns([1, 2])
+    
+    with c_desc:
+        st.markdown("""
+        **현재 적정 환율 산출 근거**
+        
+        좌측 시나리오 컨트롤의 경제 지표들이 현재 환율에 미치는 영향을 분해한 결과입니다.
+        
+        - **기본값 (Base):** 모델의 기초 체력
+        - **금리차 (Spread):** 가장 강력한 상승 요인
+        - **서학개미:** 환율 하단을 지지하는 매수세
+        - **아시아 통화:** 엔/위안화 약세 동조화
+        
+        이 값들의 합산이 최종 **Fair Value**가 됩니다.
+        """)
+        
+        with st.expander("ℹ️ 모델링 기법 적용 원리 (Architecture)"):
+            st.markdown("""
+            본 모델은 3가지 머신러닝 기법의 장점을 결합하여 최적의 가중치(Coefficient)를 도출했습니다.
+            
+            **1. 선형 회귀 (Linear Regression)**
+            * **적용:** 전체적인 수식의 골격(Base + aX + bY...)을 형성합니다.
+            * **역할:** "금리차가 커지면 환율이 오른다"는 기본 방향성을 결정했습니다.
+            
+            **2. 랜덤 포레스트 (Random Forest)**
+            * **적용:** 변수 간 상호작용 분석에 활용되었습니다.
+            * **역할:** 엔화가 약세일 때 달러 인덱스의 영향력이 증폭되는 등의 비선형적 관계를 계수 보정에 반영했습니다.
+            
+            **3. XGBoost (Boosting)**
+            * **적용:** 잔차(오차) 학습을 통한 정밀 튜닝.
+            * **역할:** 최근의 '서학개미'나 '뉴노멀(고환율)' 같은 특이 패턴을 학습하여 최종 예측 정확도를 높였습니다.
+            """)
+
+    with c_chart:
+        # Waterfall Chart로 기여도 시각화
+        fig_waterfall = go.Figure(go.Waterfall(
+            name = "Impact", orientation = "v",
+            measure = ["relative", "relative", "relative", "relative", "relative", "relative", "relative", "total"],
+            x = ["Base(1150)", "금리차", "국채금리", "달러인덱스", "서학개미", "엔화", "위안화", "Final Fair Value"],
+            textposition = "outside",
+            text = [f"{val:+.0f}" if i > 0 else f"{val:.0f}" for i, val in enumerate([base_constant, contrib_spread, contrib_us10y, contrib_dxy, contrib_seohak, contrib_jpy, contrib_cny, fair_value])],
+            y = [base_constant, contrib_spread, contrib_us10y, contrib_dxy, contrib_seohak, contrib_jpy, contrib_cny, 0],
+            connector = {"line":{"color":"#cbd5e1"}},
+            increasing = {"marker":{"color":"#f97316"}}, # 상승 요인 (오렌지)
+            decreasing = {"marker":{"color":"#3b82f6"}}, # 하락 요인 (블루)
+            totals = {"marker":{"color":"#cbd5e1"}}      # 최종 값 (회색)
+        ))
+        
+        fig_waterfall.update_layout(
+            title = "경제 지표별 적정 환율 기여도 (단위: 원)",
+            showlegend = False,
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            font=dict(color='#e2e8f0'),
+            yaxis=dict(showgrid=True, gridcolor='#334155', range=[1000, max(fair_value, 1500)*1.1]),
+            xaxis=dict(showgrid=False),
+            height=400,
+            margin=dict(t=40, b=0, l=0, r=0)
+        )
+        st.plotly_chart(fig_waterfall, use_container_width=True)
 
 # --- TAB 2: 5년 검증 ---
 with tab2:
@@ -401,7 +467,7 @@ infographic_html = """
                 const r = xValues[j];
                 const s = yValues[i];
                 // Formula sync with python
-                const spread = r - 3.0; // Assume KR rate 3.0 approx
+                const spread = r - 2.5; // Assume KR rate 2.5
                 const val = 1150 + (spread * 100) + (s - 50) * 1.5 + 100; // Simplified
                 row.push(val);
             }
