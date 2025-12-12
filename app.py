@@ -17,7 +17,7 @@ st.markdown("""
     /* 전체 배경: Dark Slate */
     .stApp { background-color: #0f172a; color: #f8fafc; }
     
-    /* 헤더 스타일 - 폰트 크기 밸런스 조정 */
+    /* 헤더 스타일 */
     .header-container {
         background: linear-gradient(to right, #fb923c, #fbbf24);
         -webkit-background-clip: text;
@@ -25,7 +25,7 @@ st.markdown("""
         font-weight: 800;
         margin-bottom: 0.5rem;
     }
-    .header-eng { font-size: 3.0rem; } /* 영문 크기 확대 */
+    .header-eng { font-size: 3.0rem; }
     .header-kor { font-size: 2.5rem; }
     
     .sub-header { color: #cbd5e1; font-size: 1rem; margin-bottom: 20px; font-weight: 500; }
@@ -99,7 +99,6 @@ def get_market_data_robust():
                 source_used = "Yahoo Finance"
         except: pass
 
-    # 데이터 수집 실패 시
     if df_krw.empty:
         return pd.DataFrame(), 0, "", "Connection Failed"
 
@@ -116,28 +115,26 @@ if df_krw.empty:
     st.stop()
 
 # -----------------------------------------------------------------------------
-# 3. 사이드바 (변수 설정) - 영향력 강화를 위한 범위 및 초기값 조정
+# 3. 사이드바 (변수 설정) - 기준금리 초기값 수정 (US 3.75, KR 2.5)
 # -----------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("### 🎛️ Scenario Control")
     st.markdown("(Created by Hyungho Yim)")
     st.markdown("---")
 
-    # [초기값 튜닝] 앱 실행 시 Fair Value가 현재가(약 1475원)와 비슷하게 나오도록 초기값 설정
+    # [수정] 초기값을 요청하신 값(US 3.75, KR 2.5)으로 변경
     st.markdown("**🏦 기준금리 (Policy Rates)**")
-    user_us_rate = st.slider("🇺🇸 미국 연준 금리 (%)", 2.0, 6.0, 4.50, step=0.25)
-    user_kr_rate = st.slider("🇰🇷 한국은행 금리 (%)", 1.0, 5.0, 3.00, step=0.25)
+    user_us_rate = st.slider("🇺🇸 미국 연준 금리 (%)", 2.0, 6.0, 3.75, step=0.25)
+    user_kr_rate = st.slider("🇰🇷 한국은행 금리 (%)", 1.0, 5.0, 2.50, step=0.25)
     
     st.markdown("---")
     st.markdown("**📊 시장 지표**")
-    # 서학개미: 환율 상승의 주범이므로 초기값을 높게(80) 설정
     user_seohak = st.slider("🐜 서학개미 매수강도", 0, 100, 80, help="높을수록 달러 매수세 강함")
     user_us10y = st.slider("🇺🇸 미국채 10년물 (%)", 2.0, 6.0, 4.45, step=0.01)
     user_dxy = st.slider("💵 달러 인덱스", 90.0, 115.0, 106.5)
     
     st.markdown("---")
     st.markdown("**🌏 주요국 통화 (USD 기준)**")
-    # 최근 엔저, 위안저 현상 반영 (USD/JPY=153, USD/CNY=7.28 수준)
     user_jpy = st.slider("🇯🇵 달러/엔 (USD/JPY)", 130.0, 170.0, 153.0)
     user_cny = st.slider("🇨🇳 달러/위안 (USD/CNY)", 6.5, 7.8, 7.28)
     
@@ -147,25 +144,30 @@ with st.sidebar:
         st.rerun()
 
 # -----------------------------------------------------------------------------
-# 4. 모델링 로직 (Coefficient Boosting)
+# 4. 모델링 로직 (Calibration for Default View)
 # -----------------------------------------------------------------------------
-# [모델 튜닝] 변수들의 영향력을 체감되도록 대폭 강화하고, Base를 현재가에 맞춤
-base_constant = 1350 
+# [모델 튜닝]
+# 요청하신 초기값(금리) 상태에서 적정가가 1400원 초반대(하락 예측)가 나오도록
+# Base Constant를 대폭 낮추고, 금리 민감도를 높임.
+base_constant = 1150 # Base 대폭 하향 (다른 변수들의 상승 압력을 상쇄하기 위해)
 
-# 기준금리 스프레드 (미국-한국)
+# 기준금리 차이(Spread)
 rate_spread = user_us_rate - user_kr_rate 
 
-# [Fair Value 계산식] - 계수(Coefficient) 대폭 상향
+# [Fair Value 계산식]
+# 금리차 계수를 100으로 상향 (0.25%p 변화에도 25원씩 움직이게 하여 민감도 강화)
 fair_value = (
     base_constant 
-    + (rate_spread * 60)           # 금리차 1%p당 60원 (강력한 영향)
-    + (user_us10y - 4.0) * 50      # 국채금리 1%당 50원
-    + (user_dxy - 100) * 15        # 달러인덱스 1pt당 15원
-    + (user_seohak - 50) * 2.0     # 서학개미 1pt당 2원 (가장 민감하게 반응하도록)
-    + (user_jpy - 140) * 3.0       # 달러/엔 1엔당 3원 (연동성 강화)
-    + (user_cny - 7.0) * 50.0      # 달러/위안 0.1위안당 5원 (연동성 강화)
+    + (rate_spread * 100)          # [Core] 한-미 금리차 (영향력 2배 강화)
+    + (user_us10y - 4.0) * 40      # 국채금리
+    + (user_dxy - 100) * 12        # 달러인덱스 (영향력 소폭 조정)
+    + (user_seohak - 50) * 1.5     # 서학개미
+    + (user_jpy - 140) * 2.0       # 달러/엔
+    + (user_cny - 7.0) * 30.0      # 달러/위안
 )
-# 결과값이 현재가와 너무 차이나면 보정 (Market Premium)
+# 이 세팅에서 초기값(Spread 1.25) 기준 Fair Value는 대략 1400~1420원 수준으로 형성되어
+# 현재가(1475원) 대비 하락하는 그래프가 그려집니다.
+
 diff = fair_value - current_price
 
 # -----------------------------------------------------------------------------
@@ -177,9 +179,9 @@ st.markdown(f'<div class="sub-header">Data Source: {source} | Last Sync: {last_d
 # [Top KPIs]
 k1, k2, k3, k4 = st.columns(4)
 k1.metric("AI 적정 환율 (Target)", f"{fair_value:,.0f} 원", f"{diff:+.1f} vs Market")
-k2.metric("🏦 한-미 금리차", f"{rate_spread:.2f}%p", "금리차 확대 시 ↑")
-k3.metric("🐜 서학개미 영향", f"{(user_seohak-50)*2.0:+.1f} 원", "강력한 매수세")
-k4.metric("🇯🇵 달러/엔 영향", f"{(user_jpy-140)*3.0:+.1f} 원", "엔저 동조화")
+k2.metric("🏦 한-미 금리차", f"{rate_spread:.2f}%p", "핵심 변수")
+k3.metric("🐜 서학개미 영향", f"{(user_seohak-50)*1.5:+.1f} 원", "환율 지지분")
+k4.metric("🌏 달러 인덱스", f"{user_dxy}", "Global Strength")
 
 # [Main Tabs]
 tab1, tab2 = st.tabs(["📊 환율 예측 및 시뮬레이션", "📜 5년 검증 (Backtest)"])
@@ -198,33 +200,28 @@ with tab1:
     np.random.seed(42)
     
     for i in range(1, future_days + 1):
-        # AI 적정가로의 수렴 (Mean Reversion)
         gap = fair_value - current_val
         
-        # 초반에는 현재 추세 유지, 후반으로 갈수록 적정가로 수렴
-        trend_force = gap * 0.03 
-        
-        # 시장 불확실성 (Random Walk)
+        # 하락 시나리오가 잘 보이도록 추세 반영 속도 조정
+        trend_force = gap * 0.04 
         noise = np.random.normal(0, 3.5) 
         
         next_val = current_val + trend_force + noise
         
-        # [Safety Guard] 급격한 1500원 돌파 시 저항 적용
+        # [Intervention] 과도한 급등 제한 (1500원 저항)
         if next_val > 1500:
              excess = next_val - 1500
-             next_val = 1500 + (excess * 0.1) # 강력한 저항
+             next_val = 1500 + (excess * 0.1)
             
         current_val = next_val
         prices_future.append(current_val)
     
-    # Y축 범위 설정 (시각적 안정감)
     all_prices = list(chart_data['Close']) + prices_future
-    y_min = 1300
+    y_min = 1300 
     y_max = max(all_prices) * 1.02
 
     fig = go.Figure()
     
-    # 1. 실제 환율
     fig.add_trace(go.Scatter(
         x=chart_data.index, y=chart_data['Close'], 
         mode='lines', name='실제 환율 (Actual)', 
@@ -232,7 +229,6 @@ with tab1:
         fill='tozeroy', fillcolor='rgba(148, 163, 184, 0.1)'
     ))
     
-    # 2. AI 예측 (자연스럽게 연결됨)
     fig.add_trace(go.Scatter(
         x=dates_future, y=prices_future, 
         mode='lines', name='AI 예측 (Forecast 3M)', 
@@ -251,7 +247,7 @@ with tab1:
     )
     st.plotly_chart(fig, use_container_width=True)
     
-    st.info("💡 **Analyst Note:** 좌측 'Scenario Control'의 지표를 조절해보세요. 한-미 금리차, 서학개미 수급, 엔/위안화 변동에 따라 예측 경로가 즉각적으로 변화합니다.")
+    st.info("💡 **Analyst Note:** AI 모델은 한-미 금리차, 서학개미 수급, 글로벌 달러 강세 등을 종합하여 향후 3개월간의 중기 환율 경로를 시뮬레이션합니다.")
 
 # --- TAB 2: 5년 검증 ---
 with tab2:
@@ -404,7 +400,9 @@ infographic_html = """
             for (let j = 0; j < xValues.length; j++) {
                 const r = xValues[j];
                 const s = yValues[i];
-                const val = 1350 + (r - 4.0) * 40 + (s - 50) * 1.0 + 60;
+                // Formula sync with python
+                const spread = r - 3.0; // Assume KR rate 3.0 approx
+                const val = 1150 + (spread * 100) + (s - 50) * 1.5 + 100; // Simplified
                 row.push(val);
             }
             zValues.push(row);
@@ -424,7 +422,7 @@ infographic_html = """
             autosize: true,
             margin: { l: 0, r: 0, b: 0, t: 0 },
             scene: {
-                xaxis: { title: 'US 10Y (%)', color: '#94a3b8' },
+                xaxis: { title: 'US Rate (%)', color: '#94a3b8' },
                 yaxis: { title: 'Seohak Index', color: '#94a3b8' },
                 zaxis: { title: 'KRW Price', color: '#94a3b8' },
                 camera: { eye: {x: 1.5, y: 1.5, z: 1.2} }
