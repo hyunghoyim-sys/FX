@@ -225,11 +225,6 @@ with tab1:
         
         next_val = current_val + trend_force + noise
         
-        # 1500원 저항
-        if next_val > 1500:
-             excess = next_val - 1500
-             next_val = 1500 + (excess * 0.1)
-            
         current_val = next_val
         prices_future.append(current_val)
     
@@ -271,7 +266,7 @@ with tab2:
     st.markdown("#### 지난 5년간 모델 정합성 테스트")
     backtest_df = df_krw.iloc[::5].copy()
     noise = np.random.normal(0, 10, len(backtest_df))
-    backtest_df['Model_Value'] = backtest_df['Close'].rolling(window=10).mean().shift(-5).fillna(method='bfill') + noise
+    backtest_df['Model_Value'] = backtest_df['Close'].rolling(window=10).mean().shift(-5).bfill() + noise
     
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(x=backtest_df.index, y=backtest_df['Close'], name='실제 시장가 (Actual)', line=dict(color='#cbd5e1', width=1.5)))
